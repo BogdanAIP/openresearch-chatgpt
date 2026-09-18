@@ -1,6 +1,6 @@
 import { defaultProjectsRoot } from "./project-path.js";
 
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1"]);
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]");
 
 function parsePort(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
