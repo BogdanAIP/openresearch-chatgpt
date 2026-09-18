@@ -17,7 +17,7 @@ import { OrxClient } from "./orx-client.js";
 const orx = new OrxClient(config.orxBin, config.timeoutMs);
 const http = new OpenResearchHttpClient(config.orxBaseUrl, config.timeoutMs);
 const git = new GitExperimentEditor(config.gitBin, config.timeoutMs);
-const handler = createMcpHandler(() => buildMcpServer(orx, http, git), { responseMode: "json" });
+const handler = createMcpHandler(() => buildMcpServer(orx, http, git, config.projectsRoot), { responseMode: "json" });
 const nodeHandler = toNodeHandler(handler);
 const validateHost = config.allowedHostnames.length > 0
   ? hostHeaderValidation(config.allowedHostnames)
@@ -29,7 +29,7 @@ const server = createServer((req, res) => {
 
   if (requestUrl.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: true, service: "openresearch-chatgpt", version: "0.2.0" }));
+    res.end(JSON.stringify({ ok: true, service: "openresearch-chatgpt", version: "0.3.0" }));
     return;
   }
 
@@ -47,6 +47,7 @@ server.listen(config.port, config.host, () => {
   console.error(`[openresearch-chatgpt] MCP: http://${config.host}:${config.port}/mcp`);
   console.error(`[openresearch-chatgpt] health: http://${config.host}:${config.port}/health`);
   console.error(`[openresearch-chatgpt] OpenResearch: ${config.orxBaseUrl.origin}`);
+  console.error(`[openresearch-chatgpt] managed projects: ${config.projectsRoot}`);
 });
 
 async function shutdown(signal: string): Promise<void> {
