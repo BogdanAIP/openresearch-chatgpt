@@ -112,7 +112,7 @@ It opens a small status window with one large button:
 - green `ВКЛЮЧЕНО` when OpenResearch, the Tura bridge, and the OpenAI tunnel are all usable;
 - red `ВЫКЛЮЧЕНО` when the research stack is unavailable.
 
-Click the green button to stop OpenResearch and the Tura bridge. The already-authorized tunnel process is intentionally left idle in the background so ordinary off/on cycles do not require credentials again.
+Click the green button to stop the OpenAI tunnel first, then the Tura bridge and OpenResearch. A successful red `ВЫКЛЮЧЕНО` state therefore leaves no background process from this Tura/OpenResearch stack running.
 
 Click the red button to start OpenResearch and Tura. If the OpenAI tunnel is also absent (for example after a Windows reboot), the controller starts it too. The first time this is required, the controller asks for the Runtime API key and stores it locally with Windows DPAPI encryption under `%LOCALAPPDATA%\OpenResearchChatGPT`; the key is never written to the repository.
 
