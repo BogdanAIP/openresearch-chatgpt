@@ -3,6 +3,16 @@ import { spawn } from "node:child_process";
 export type DiscoveryStrategy = "keyword" | "embedding" | "openalex" | "biorxiv";
 export type DiscoveryPriority = "default" | "recency" | "historical" | "popular";
 export type LiteratureSource = "alphaxiv" | "openalex" | "biorxiv";
+export type ComputeBackend =
+  | "local"
+  | "ssh"
+  | "slurm"
+  | "ray"
+  | "k8s"
+  | "modal"
+  | "hf"
+  | "openresearch"
+  | "tinker";
 
 export interface LiteratureSearchInput {
   query: string;
@@ -17,6 +27,35 @@ export interface PaperReadInput {
   id: string;
   source?: LiteratureSource;
   full?: boolean;
+}
+
+export interface CreateExperimentInput {
+  projectId: string;
+  title: string;
+  parentId?: string;
+  description?: string;
+  baseline?: boolean;
+}
+
+export interface RunExperimentInput {
+  experimentId: string;
+  backend?: ComputeBackend;
+  flavor?: string;
+  host?: string;
+  manifest?: string;
+  provider?: string;
+  org?: string;
+  image?: string;
+  timeout?: string;
+  force?: boolean;
+}
+
+export interface ReadLogsInput {
+  runId: string;
+  head?: boolean;
+  bytes?: number;
+  rangeStart?: number;
+  rangeEnd?: number;
 }
 
 export interface CommandResult {
@@ -51,6 +90,41 @@ export function buildPaperArgs(input: PaperReadInput): string[] {
   return args;
 }
 
+export function buildCreateExperimentArgs(input: CreateExperimentInput): string[] {
+  const args = ["create-experiment", input.projectId, "--title", input.title];
+  if (input.parentId) args.push("--parent", input.parentId);
+  if (input.description) args.push("--description", input.description);
+  if (input.baseline) args.push("--baseline");
+  return args;
+}
+
+export function buildRunExperimentArgs(input: RunExperimentInput): string[] {
+  const args = ["exp", "run", input.experimentId];
+  if (input.backend) args.push("--backend", input.backend);
+  if (input.flavor) args.push("--flavor", input.flavor);
+  if (input.host) args.push("--host", input.host);
+  if (input.manifest) args.push("--manifest", input.manifest);
+  if (input.provider) args.push("--provider", input.provider);
+  if (input.org) args.push("--org", input.org);
+  if (input.image) args.push("--image", input.image);
+  if (input.timeout) args.push("--timeout", input.timeout);
+  if (input.force) args.push("--force");
+  return args;
+}
+
+export function buildLogsArgs(input: ReadLogsInput): string[] {
+  const args = ["logs", input.runId];
+  if (input.head) args.push("--head");
+  if (input.bytes !== undefined) args.push("--bytes", String(input.bytes));
+  const hasStart = input.rangeStart !== undefined;
+  const hasEnd = input.rangeEnd !== undefined;
+  if (hasStart !== hasEnd) {
+    throw new Error("rangeStart and rangeEnd must be provided together");
+  }
+  if (hasStart && hasEnd) args.push("--range", `${input.rangeStart}:${input.rangeEnd}`);
+  return args;
+}
+
 export class OrxClient {
   constructor(
     private readonly binary: string,
@@ -63,13 +137,14 @@ export class OrxClient {
   }
 
   async searchLiterature(input: LiteratureSearchInput): Promise<unknown> {
-    const result = await this.run(buildDiscoverArgs(input));
+    const args = buildDiscoverArgs(input);
+    const result = await this.run(args);
     try {
       return JSON.parse(result.stdout);
     } catch (error) {
       throw new OrxCommandError(
         `OpenResearch returned invalid JSON for literature search: ${error instanceof Error ? error.message : String(error)}`,
-        buildDiscoverArgs(input),
+        args,
         result.stderr,
       );
     }
@@ -77,6 +152,19 @@ export class OrxClient {
 
   async readPaper(input: PaperReadInput): Promise<string> {
     const result = await this.run(buildPaperArgs(input));
+    return result.stdout;
+  }
+
+  createExperiment(input: CreateExperimentInput): Promise<CommandResult> {
+    return this.run(buildCreateExperimentArgs(input));
+  }
+
+  runExperiment(input: RunExperimentInput): Promise<CommandResult> {
+    return this.run(buildRunExperimentArgs(input));
+  }
+
+  async readLogs(input: ReadLogsInput): Promise<string> {
+    const result = await this.run(buildLogsArgs(input));
     return result.stdout;
   }
 

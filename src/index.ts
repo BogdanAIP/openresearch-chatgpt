@@ -9,13 +9,15 @@ import {
 import { createMcpHandler } from "@modelcontextprotocol/server";
 
 import { config } from "./config.js";
+import { GitExperimentEditor } from "./git-experiment.js";
 import { buildMcpServer } from "./mcp.js";
 import { OpenResearchHttpClient } from "./openresearch-http.js";
 import { OrxClient } from "./orx-client.js";
 
 const orx = new OrxClient(config.orxBin, config.timeoutMs);
 const http = new OpenResearchHttpClient(config.orxBaseUrl, config.timeoutMs);
-const handler = createMcpHandler(() => buildMcpServer(orx, http), { responseMode: "json" });
+const git = new GitExperimentEditor(config.gitBin, config.timeoutMs);
+const handler = createMcpHandler(() => buildMcpServer(orx, http, git), { responseMode: "json" });
 const nodeHandler = toNodeHandler(handler);
 const validateHost = config.allowedHostnames.length > 0
   ? hostHeaderValidation(config.allowedHostnames)
@@ -27,7 +29,7 @@ const server = createServer((req, res) => {
 
   if (requestUrl.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ ok: true, service: "openresearch-chatgpt", version: "0.1.0" }));
+    res.end(JSON.stringify({ ok: true, service: "openresearch-chatgpt", version: "0.2.0" }));
     return;
   }
 

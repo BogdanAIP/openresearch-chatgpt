@@ -21,7 +21,7 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 export function assertLoopbackUrl(rawUrl: string): URL {
   const url = new URL(rawUrl);
   if (url.protocol !== "http:") {
-    throw new Error(`ORX_BASE_URL must use http:// in v0.1, got ${url.protocol}`);
+    throw new Error(`ORX_BASE_URL must use http://, got ${url.protocol}`);
   }
   if (!LOOPBACK_HOSTS.has(url.hostname)) {
     throw new Error(`ORX_BASE_URL must point to loopback, got ${url.hostname}`);
@@ -31,7 +31,7 @@ export function assertLoopbackUrl(rawUrl: string): URL {
 
 export function assertLoopbackHost(host: string): string {
   if (!LOOPBACK_HOSTS.has(host)) {
-    throw new Error(`MCP_HOST must be loopback in v0.1, got ${host}`);
+    throw new Error(`MCP_HOST must be loopback, got ${host}`);
   }
   return host;
 }
@@ -40,6 +40,7 @@ export const config = {
   host: assertLoopbackHost(process.env.MCP_HOST ?? "127.0.0.1"),
   port: parsePort(process.env.MCP_PORT, 8787),
   orxBin: process.env.ORX_BIN ?? "orx",
+  gitBin: process.env.GIT_BIN ?? "git",
   orxBaseUrl: assertLoopbackUrl(process.env.ORX_BASE_URL ?? "http://127.0.0.1:4791"),
   timeoutMs: parsePositiveInt(process.env.ORX_TIMEOUT_MS, 30_000),
   allowedHostnames: (process.env.MCP_ALLOWED_HOSTNAMES ?? "")
