@@ -22,7 +22,41 @@ export interface ProjectFile {
   binary: boolean;
   notFound: boolean;
   root: string;
+  version?: string | null;
+  presentation?: string;
 }
+
+export interface CreateProjectInput {
+  name: string;
+  path: string;
+  runCommand?: string;
+  paperId?: string;
+  cloneUrl?: string;
+  creationMode?: "blank" | "paper";
+  createFolder?: boolean;
+  requireNewFolder?: boolean;
+  initializeGit?: boolean;
+  githubSyncEnabled?: boolean;
+  locale?: string;
+}
+
+export interface DiffPayload {
+  diff: string;
+  truncated: boolean;
+  bytesRead: number;
+  byteLimit: number;
+}
+
+export interface CodeTree {
+  root: string;
+  branch: string | null;
+  entries: string[];
+  truncated: boolean;
+}
+
+export type FileAction =
+  | { action: "rename"; newName: string }
+  | { action: "duplicate" | "delete" };
 
 export class OpenResearchHttpClient {
   constructor(
@@ -39,9 +73,34 @@ export class OpenResearchHttpClient {
     return (payload.projects ?? []).map(parseProject);
   }
 
+  async createProject(input: CreateProjectInput): Promise<{ project: ProjectRecord; githubPublicationError: string | null }> {
+    const payload = await this.requestJson<{ project: unknown; githubPublicationError?: string | null }>(
+      "POST",
+      "/api/projects",
+      input,
+    );
+    return {
+      project: parseProject(payload.project),
+      githubPublicationError: payload.githubPublicationError ?? null,
+    };
+  }
+
   async getProject(projectId: string): Promise<ProjectRecord> {
     const payload = await this.requestJson("GET", `/api/projects/${encodeURIComponent(projectId)}`);
     return parseProject(unwrapRecord(payload, "project"));
+  }
+
+  async updateProject(projectId: string, input: { name?: string; runCommand?: string }): Promise<ProjectRecord> {
+    const payload = await this.requestJson(
+      "PATCH",
+      `/api/projects/${encodeURIComponent(projectId)}`,
+      input,
+    );
+    return parseProject(unwrapRecord(payload, "project"));
+  }
+
+  async deleteProject(projectId: string): Promise<void> {
+    await this.requestJson("DELETE", `/api/projects/${encodeURIComponent(projectId)}`);
   }
 
   async listExperiments(projectId: string): Promise<ExperimentRecord[]> {
@@ -67,6 +126,11 @@ export class OpenResearchHttpClient {
     return (payload.runs ?? []).map(parseRun);
   }
 
+  async listInstances(): Promise<RunRecord[]> {
+    const payload = await this.requestJson<{ instances?: unknown[] }>("GET", "/api/instances");
+    return (payload.instances ?? []).map(parseRun);
+  }
+
   async getRun(runId: string): Promise<RunRecord> {
     const payload = await this.requestJson("GET", `/api/runs/${encodeURIComponent(runId)}`);
     return parseRun(unwrapRecord(payload, "run"));
@@ -76,15 +140,113 @@ export class OpenResearchHttpClient {
     await this.requestJson("POST", `/api/runs/${encodeURIComponent(runId)}/cancel`);
   }
 
-  async getProjectFile(projectId: string, path: string, branch: string): Promise<ProjectFile> {
-    const params = new URLSearchParams({ path, ref: branch });
+  getRunDiff(runId: string): Promise<DiffPayload> {
+    return this.requestJson("GET", `/api/runs/${encodeURIComponent(runId)}/diff`);
+  }
+
+  getExperimentDiff(experimentId: string): Promise<DiffPayload> {
+    return this.requestJson("GET", `/api/experiments/${encodeURIComponent(experimentId)}/diff`);
+  }
+
+  async getProjectFile(projectId: string, path: string, branch?: string): Promise<ProjectFile> {
+    const params = new URLSearchParams({ path });
+    if (branch) params.set("ref", branch);
     return this.requestJson<ProjectFile>(
       "GET",
       `/api/projects/${encodeURIComponent(projectId)}/file?${params.toString()}`,
     );
   }
 
-  private async requestJson<T = unknown>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+  saveProjectFile(
+    projectId: string,
+    input: { path: string; content: string; expectedVersion: string },
+  ): Promise<{ ok: boolean; root: string; bytesWritten: number; version: string }> {
+    return this.requestJson(
+      "PUT",
+      `/api/projects/${encodeURIComponent(projectId)}/file`,
+      input,
+    );
+  }
+
+  manageProjectFile(projectId: string, path: string, action: FileAction): Promise<{ ok: boolean; path: string }> {
+    return this.requestJson(
+      "PATCH",
+      `/api/projects/${encodeURIComponent(projectId)}/file`,
+      { path, ...action },
+    );
+  }
+
+  getCodeTree(projectId: string, branch?: string): Promise<CodeTree> {
+    const params = new URLSearchParams();
+    if (branch) params.set("ref", branch);
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    return this.requestJson("GET", `/api/projects/${encodeURIComponent(projectId)}/code-tree${suffix}`);
+  }
+
+  getProjectGitStatus(projectId: string): Promise<unknown> {
+    return this.requestJson("GET", `/api/projects/${encodeURIComponent(projectId)}/git`);
+  }
+
+  initializeProjectGit(projectId: string): Promise<unknown> {
+    return this.requestJson("POST", `/api/projects/${encodeURIComponent(projectId)}/git/init`);
+  }
+
+  enableProjectGithub(projectId: string): Promise<unknown> {
+    return this.requestJson("POST", `/api/projects/${encodeURIComponent(projectId)}/github`);
+  }
+
+  disableProjectGithub(projectId: string): Promise<unknown> {
+    return this.requestJson("POST", `/api/projects/${encodeURIComponent(projectId)}/github/disable`);
+  }
+
+  pushProjectGithub(projectId: string): Promise<unknown> {
+    return this.requestJson("POST", `/api/projects/${encodeURIComponent(projectId)}/github/push`);
+  }
+
+  getComputeSettings(projectId?: string): Promise<unknown> {
+    const suffix = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+    return this.requestJson("GET", `/api/settings/compute${suffix}`);
+  }
+
+  setComputeDefault(input: { backend: string | null; flavor?: string | null; projectId?: string }): Promise<unknown> {
+    return this.requestJson("POST", "/api/settings/compute/default", input);
+  }
+
+  getLocalMachine(): Promise<unknown> {
+    return this.requestJson("GET", "/api/settings/local");
+  }
+
+  getLatexEngine(): Promise<unknown> {
+    return this.requestJson("GET", "/api/latex/engine");
+  }
+
+  compileLatex(projectId: string, path: string): Promise<unknown> {
+    return this.requestJson(
+      "POST",
+      `/api/projects/${encodeURIComponent(projectId)}/file/latex`,
+      { path },
+    );
+  }
+
+  manageArtifactFile(projectId: string, path: string, action: FileAction): Promise<{ ok: boolean; path?: string }> {
+    if (action.action === "delete") {
+      return this.requestJson(
+        "DELETE",
+        `/api/projects/${encodeURIComponent(projectId)}/files?path=${encodeURIComponent(path)}`,
+      );
+    }
+    return this.requestJson(
+      "PATCH",
+      `/api/projects/${encodeURIComponent(projectId)}/files`,
+      { path, ...action },
+    );
+  }
+
+  private async requestJson<T = unknown>(
+    method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
+    path: string,
+    body?: unknown,
+  ): Promise<T> {
     const url = new URL(path, this.baseUrl);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
