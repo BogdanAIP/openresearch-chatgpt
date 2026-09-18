@@ -281,9 +281,41 @@ function Start-Stack {
     Start-Tunnel
 }
 
+function Stop-Tunnel {
+    $state = Get-TunnelState
+    if (-not $state.Running) { return }
+
+    $bin = Get-TunnelBin
+    $raw = & $bin runtimes stop $Alias --json 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw ("Не удалось остановить OpenAI Tunnel:" + [Environment]::NewLine + ($raw -join [Environment]::NewLine))
+    }
+
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $state = Get-TunnelState
+        if (-not $state.Running) { return }
+        Start-Sleep -Milliseconds 300
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+
+    throw "OpenAI Tunnel не завершился за 15 секунд."
+}
+
 function Stop-Stack {
+    $tunnelError = $null
+    try {
+        Stop-Tunnel
+    } catch {
+        $tunnelError = $_.Exception.Message
+    }
+
     Stop-PortOwner 8787
     Stop-PortOwner 4791
+
+    if ($tunnelError) {
+        throw $tunnelError
+    }
 }
 
 $form = New-Object System.Windows.Forms.Form
@@ -316,7 +348,7 @@ $button.Font = New-Object System.Drawing.Font("Segoe UI", 16, [System.Drawing.Fo
 $form.Controls.Add($button)
 
 $note = New-Object System.Windows.Forms.Label
-$note.Text = "Выключение останавливает OpenResearch и Tura." + [Environment]::NewLine + "Туннель остаётся тихо в фоне для быстрого повторного включения."
+$note.Text = "Выключение останавливает OpenResearch, Tura и OpenAI Tunnel." + [Environment]::NewLine + "В красном состоянии процессы этой связки не должны оставаться в фоне."
 $note.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
 $note.ForeColor = [System.Drawing.Color]::DimGray
 $note.Location = New-Object System.Drawing.Point(25, 248)
