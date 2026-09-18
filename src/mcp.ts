@@ -3,9 +3,10 @@ import { createHash } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/server";
 import * as z from "zod/v4";
 
-import { ArtifactStore } from "./artifacts.js";
-import type { GitExperimentEditor } from "./git-experiment.js";
+import { ArtifactStore, validateArtifactPath } from "./artifacts.js";
+import { GitExperimentEditor, validateRepoRelativePath } from "./git-experiment.js";
 import type { OpenResearchHttpClient } from "./openresearch-http.js";
+import { resolveManagedProjectPath } from "./project-path.js";
 import type { OrxClient } from "./orx-client.js";
 
 function jsonText(value: unknown): string {
@@ -32,9 +33,10 @@ export function buildMcpServer(
   orx: OrxClient,
   http: OpenResearchHttpClient,
   git: GitExperimentEditor,
+  projectsRoot: string,
   artifacts = new ArtifactStore(),
 ): McpServer {
-  const server = new McpServer({ name: "openresearch-chatgpt", version: "0.2.0" });
+  const server = new McpServer({ name: "openresearch-chatgpt", version: "0.3.0" });
 
   server.registerTool(
     "openresearch_status",
@@ -410,6 +412,419 @@ export function buildMcpServer(
       try {
         const project = await http.getProject(projectId);
         return ok(await artifacts.write(project.artifactsDir, path, content));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+
+  server.registerTool(
+    "project_create",
+    {
+      description:
+        "Create and register a new OpenResearch project inside the managed ORX_PROJECTS_ROOT. Initializes Git and can optionally clone a repository or seed from a paper.",
+      inputSchema: z.object({
+        name: z.string().min(1).max(200),
+        folderName: z.string().min(1).max(120).optional(),
+        runCommand: z.string().max(2000).optional(),
+        paperId: z.string().min(1).max(1000).optional(),
+        cloneUrl: z.string().url().max(2000).optional(),
+        githubSyncEnabled: z.boolean().default(false),
+        locale: z.string().min(2).max(32).default("en"),
+      }),
+    },
+    async (input) => {
+      try {
+        const path = resolveManagedProjectPath(projectsRoot, input.name, input.folderName);
+        const created = await http.createProject({
+          name: input.name.trim(),
+          path,
+          runCommand: input.runCommand,
+          paperId: input.paperId,
+          cloneUrl: input.cloneUrl,
+          creationMode: input.paperId ? "paper" : "blank",
+          createFolder: true,
+          requireNewFolder: true,
+          initializeGit: true,
+          githubSyncEnabled: input.githubSyncEnabled,
+          locale: input.locale,
+        });
+        return ok({ ...created, managedRoot: projectsRoot });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "project_update",
+    {
+      description: "Rename an OpenResearch project and/or change its fixed default run command.",
+      inputSchema: z.object({
+        projectId: z.string().min(1).max(256),
+        name: z.string().min(1).max(200).optional(),
+        runCommand: z.string().max(2000).optional(),
+      }),
+    },
+    async ({ projectId, name, runCommand }) => {
+      try {
+        if (name === undefined && runCommand === undefined) {
+          throw new Error("provide name and/or runCommand");
+        }
+        return ok(await http.updateProject(projectId, { name, runCommand }));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "project_delete",
+    {
+      description:
+        "Unregister an OpenResearch project. This does not delete the project repository directory, but it removes OpenResearch project state. confirmName must exactly match the current project name.",
+      inputSchema: z.object({
+        projectId: z.string().min(1).max(256),
+        confirmName: z.string().min(1).max(200),
+      }),
+    },
+    async ({ projectId, confirmName }) => {
+      try {
+        const project = await http.getProject(projectId);
+        if (!project.name || confirmName !== project.name) {
+          throw new Error("confirmName must exactly match the current project name");
+        }
+        await http.deleteProject(projectId);
+        return ok({ ok: true, projectId, deletedRegistration: true, repositoryPreserved: true });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "project_tree",
+    {
+      description:
+        "List repository-relative files for the main project checkout or for one experiment's committed branch.",
+      inputSchema: z.object({
+        projectId: z.string().min(1).max(256),
+        experimentId: z.string().min(1).max(256).optional(),
+      }),
+    },
+    async ({ projectId, experimentId }) => {
+      try {
+        const branch = experimentId
+          ? (await http.getExperiment(projectId, experimentId)).branchName
+          : undefined;
+        return ok(await http.getCodeTree(projectId, branch));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "project_file_read",
+    {
+      description:
+        "Read a UTF-8 text file from the project's main checkout. Paths are repository-relative and .git is blocked.",
+      inputSchema: z.object({
+        projectId: z.string().min(1).max(256),
+        path: z.string().min(1).max(1024),
+      }),
+    },
+    async ({ projectId, path }) => {
+      try {
+        const safePath = validateRepoRelativePath(path);
+        const file = await http.getProjectFile(projectId, safePath);
+        if (file.notFound) throw new Error(`File not found: ${safePath}`);
+        if (file.binary) throw new Error(`File is not text: ${safePath}`);
+        return ok({ ...file, contentSha256: sha256(file.content) });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "project_file_write",
+    {
+      description:
+        "Overwrite one text file in the project's main checkout using OpenResearch optimistic concurrency. Read it first and pass the returned version as expectedVersion.",
+      inputSchema: z.object({
+        projectId: z.string().min(1).max(256),
+        path: z.string().min(1).max(1024),
+        content: z.string().max(8_000_000),
+        expectedVersion: z.string().min(1).max(256),
+      }),
+    },
+    async ({ projectId, path, content, expectedVersion }) => {
+      try {
+        const safePath = validateRepoRelativePath(path);
+        return ok(await http.saveProjectFile(projectId, { path: safePath, content, expectedVersion }));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "project_file_manage",
+    {
+      description:
+        "Rename, duplicate, or delete a repository-relative project file. Delete requires confirmPath to exactly repeat path.",
+      inputSchema: z.object({
+        projectId: z.string().min(1).max(256),
+        path: z.string().min(1).max(1024),
+        action: z.enum(["rename", "duplicate", "delete"]),
+        newName: z.string().min(1).max(255).optional(),
+        confirmPath: z.string().max(1024).optional(),
+      }),
+    },
+    async ({ projectId, path, action, newName, confirmPath }) => {
+      try {
+        const safePath = validateRepoRelativePath(path);
+        if (action === "delete" && confirmPath !== path) {
+          throw new Error("confirmPath must exactly match path for deletion");
+        }
+        if (action === "rename") {
+          if (!newName || /[\\/\\\\]/.test(newName) || newName === "." || newName === ".." || newName === ".git") {
+            throw new Error("rename requires one safe newName without path separators");
+          }
+          return ok(await http.manageProjectFile(projectId, safePath, { action, newName }));
+        }
+        return ok(await http.manageProjectFile(projectId, safePath, { action }));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "experiment_diff",
+    {
+      description: "Read the Git diff OpenResearch reports for one experiment.",
+      inputSchema: z.object({ experimentId: z.string().min(1).max(256) }),
+    },
+    async ({ experimentId }) => {
+      try {
+        return ok(await http.getExperimentDiff(experimentId));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "run_diff",
+    {
+      description: "Read the Git diff captured for one OpenResearch run.",
+      inputSchema: z.object({ runId: z.string().min(1).max(256) }),
+    },
+    async ({ runId }) => {
+      try {
+        return ok(await http.getRunDiff(runId));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "instance_list",
+    { description: "List runs across all OpenResearch projects, matching the compute/instances view." },
+    async () => {
+      try {
+        return ok({ instances: await http.listInstances() });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "project_git_status",
+    {
+      description: "Read Git initialization, identity, remotes, cleanliness, and GitHub sync status for a project.",
+      inputSchema: z.object({ projectId: z.string().min(1).max(256) }),
+    },
+    async ({ projectId }) => {
+      try {
+        return ok(await http.getProjectGitStatus(projectId));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "project_git_init",
+    {
+      description: "Initialize Git for an existing OpenResearch project when it is not already a repository.",
+      inputSchema: z.object({ projectId: z.string().min(1).max(256) }),
+    },
+    async ({ projectId }) => {
+      try {
+        return ok(await http.initializeProjectGit(projectId));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "project_github_enable",
+    {
+      description:
+        "Enable OpenResearch GitHub synchronization for a project using the GitHub credentials already configured in OpenResearch.",
+      inputSchema: z.object({ projectId: z.string().min(1).max(256) }),
+    },
+    async ({ projectId }) => {
+      try {
+        return ok(await http.enableProjectGithub(projectId));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "project_github_disable",
+    {
+      description: "Disable OpenResearch GitHub synchronization for a project without deleting the local repository.",
+      inputSchema: z.object({ projectId: z.string().min(1).max(256) }),
+    },
+    async ({ projectId }) => {
+      try {
+        return ok(await http.disableProjectGithub(projectId));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "project_github_push",
+    {
+      description: "Ask OpenResearch to push the project's current Git state to its configured GitHub repository.",
+      inputSchema: z.object({ projectId: z.string().min(1).max(256) }),
+    },
+    async ({ projectId }) => {
+      try {
+        return ok(await http.pushProjectGithub(projectId));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "compute_get",
+    {
+      description: "Read available compute targets and the current default, optionally resolved for one project.",
+      inputSchema: z.object({ projectId: z.string().min(1).max(256).optional() }),
+    },
+    async ({ projectId }) => {
+      try {
+        return ok(await http.getComputeSettings(projectId));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "compute_set_default",
+    {
+      description:
+        "Set or clear the OpenResearch default compute backend globally or for one project. This does not accept credentials or secrets.",
+      inputSchema: z.object({
+        backend: z.enum(["local", "ssh", "slurm", "ray", "k8s", "modal", "hf", "openresearch", "tinker"]).nullable(),
+        flavor: z.string().min(1).max(256).nullable().optional(),
+        projectId: z.string().min(1).max(256).optional(),
+      }),
+    },
+    async (input) => {
+      try {
+        return ok(await http.setComputeDefault(input));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "local_machine_get",
+    { description: "Read the local machine hardware summary detected by OpenResearch for local compute." },
+    async () => {
+      try {
+        return ok(await http.getLocalMachine());
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "latex_status",
+    { description: "Check which LaTeX engine OpenResearch can use on the local machine." },
+    async () => {
+      try {
+        return ok(await http.getLatexEngine());
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "latex_compile",
+    {
+      description: "Compile one repository-relative .tex file in the project's main checkout through OpenResearch.",
+      inputSchema: z.object({
+        projectId: z.string().min(1).max(256),
+        path: z.string().min(1).max(1024),
+      }),
+    },
+    async ({ projectId, path }) => {
+      try {
+        const safePath = validateRepoRelativePath(path);
+        if (!safePath.toLowerCase().endsWith(".tex")) throw new Error("latex_compile requires a .tex file");
+        return ok(await http.compileLatex(projectId, safePath));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    "artifact_manage",
+    {
+      description:
+        "Rename, duplicate, or delete a durable artifact. Delete requires confirmPath to exactly repeat path.",
+      inputSchema: z.object({
+        projectId: z.string().min(1).max(256),
+        path: z.string().min(1).max(1024),
+        action: z.enum(["rename", "duplicate", "delete"]),
+        newName: z.string().min(1).max(255).optional(),
+        confirmPath: z.string().max(1024).optional(),
+      }),
+    },
+    async ({ projectId, path, action, newName, confirmPath }) => {
+      try {
+        const safePath = validateArtifactPath(path);
+        if (action === "delete" && confirmPath !== path) {
+          throw new Error("confirmPath must exactly match path for deletion");
+        }
+        if (action === "rename") {
+          if (!newName || /[\\/\\\\]/.test(newName) || newName === "." || newName === "..") {
+            throw new Error("rename requires one safe newName without path separators");
+          }
+          return ok(await http.manageArtifactFile(projectId, safePath, { action, newName }));
+        }
+        return ok(await http.manageArtifactFile(projectId, safePath, { action }));
       } catch (error) {
         return failure(error);
       }

@@ -1,3 +1,5 @@
+import { defaultProjectsRoot } from "./project-path.js";
+
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 
 function parsePort(value: string | undefined, fallback: number): number {
@@ -42,6 +44,7 @@ export const config = {
   orxBin: process.env.ORX_BIN ?? "orx",
   gitBin: process.env.GIT_BIN ?? "git",
   orxBaseUrl: assertLoopbackUrl(process.env.ORX_BASE_URL ?? "http://127.0.0.1:4791"),
+  projectsRoot: defaultProjectsRoot(),
   timeoutMs: parsePositiveInt(process.env.ORX_TIMEOUT_MS, 30_000),
   allowedHostnames: (process.env.MCP_ALLOWED_HOSTNAMES ?? "")
     .split(",")
