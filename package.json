@@ -1,0 +1,27 @@
+{
+  "name": "openresearch-chatgpt",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Narrow MCP bridge exposing OpenResearch read-only research capabilities to ChatGPT.",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "check": "npm run build && npm test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.5",
+    "typescript": "^6.0.0"
+  }
+}
