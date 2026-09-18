@@ -21,7 +21,7 @@ export function sanitizeProjectFolderName(name: string): string {
 export function resolveManagedProjectPath(root: string, name: string, folderName?: string): string {
   const resolvedRoot = resolve(root);
   const rawSegment = (folderName ?? name).trim();
-  if (/[\\/]/.test(rawSegment) || rawSegment === "." || rawSegment === "..") {
+  if (folderName !== undefined && (/[\\/]/.test(rawSegment) || rawSegment === "." || rawSegment === "..")) {
     throw new Error("project folder name must be a single directory name");
   }
   const segment = sanitizeProjectFolderName(rawSegment);
