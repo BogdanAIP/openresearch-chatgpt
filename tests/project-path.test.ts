@@ -15,6 +15,10 @@ test("managed project paths stay under the configured root", () => {
     resolveManagedProjectPath(root, "Demo", "demo"),
     resolve(root, "demo"),
   );
+  assert.equal(
+    resolveManagedProjectPath(root, "Ni/Cu catalyst"),
+    resolve(root, "Ni-Cu catalyst"),
+  );
   assert.throws(
     () => resolveManagedProjectPath(root, "Demo", "../escape"),
     /single directory name|stay inside/,
