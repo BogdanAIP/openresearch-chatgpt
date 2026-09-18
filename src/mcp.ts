@@ -539,8 +539,8 @@ export function buildMcpServer(
       try {
         const safePath = validateRepoRelativePath(path);
         const file = await http.getProjectFile(projectId, safePath);
-        if (file.notFound) throw new Error(\`File not found: \${safePath}\`);
-        if (file.binary) throw new Error(\`File is not text: \${safePath}\`);
+        if (file.notFound) throw new Error(`File not found: ${safePath}`);
+        if (file.binary) throw new Error(`File is not text: ${safePath}`);
         return ok({ ...file, contentSha256: sha256(file.content) });
       } catch (error) {
         return failure(error);
