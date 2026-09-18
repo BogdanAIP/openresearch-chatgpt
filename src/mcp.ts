@@ -81,8 +81,8 @@ export function buildMcpServer(orx: OrxClient, http: OpenResearchHttpClient): Mc
       inputSchema: z.object({
         query: z.string().min(1).max(2000),
         strategy: z.enum(["keyword", "embedding", "openalex", "biorxiv"]).default("embedding"),
-        publishedAfter: z.string().regex(/^\\d{4}-\\d{2}-\\d{2}$/).optional(),
-        publishedBefore: z.string().regex(/^\\d{4}-\\d{2}-\\d{2}$/).optional(),
+        publishedAfter: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        publishedBefore: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
         priority: z.enum(["default", "recency", "historical", "popular"]).default("default"),
         limit: z.number().int().min(1).max(50).default(15),
       }),
