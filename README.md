@@ -98,6 +98,32 @@ ChatGPT is already the conversational agent in this architecture, so exposing an
 
 The bridge calls `orx`, `git`, and the local OpenResearch HTTP API internally with fixed typed operations. Child processes use `shell: false`.
 
+
+## Windows one-click controller
+
+On the Windows machine that hosts OpenResearch, double-click:
+
+```text
+Tura Control.cmd
+```
+
+It opens a small status window with one large button:
+
+- green `ВКЛЮЧЕНО` when OpenResearch, the Tura bridge, and the OpenAI tunnel are all usable;
+- red `ВЫКЛЮЧЕНО` when the research stack is unavailable.
+
+Click the green button to stop OpenResearch and the Tura bridge. The already-authorized tunnel process is intentionally left idle in the background so ordinary off/on cycles do not require credentials again.
+
+Click the red button to start OpenResearch and Tura. If the OpenAI tunnel is also absent (for example after a Windows reboot), the controller starts it too. The first time this is required, the controller asks for the Runtime API key and stores it locally with Windows DPAPI encryption under `%LOCALAPPDATA%\OpenResearchChatGPT`; the key is never written to the repository.
+
+Logs created by the controller live under:
+
+```text
+%LOCALAPPDATA%\OpenResearchChatGPT\logs
+```
+
+No Windows autorun entry is installed. The controller is always started manually.
+
 ## Requirements
 
 - OpenResearch installed.
