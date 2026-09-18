@@ -43,7 +43,7 @@ const server = createServer((req, res) => {
 
 server.listen(config.port, config.host, () => {
   console.error(`[openresearch-chatgpt] MCP: http://${config.host}:${config.port}/mcp`);
-  console.error(`[openresearch-chatgpt] health: http:///${config.host}:${config.port}/health`);
+  console.error(`[openresearch-chatgpt] health: http://${config.host}:${config.port}/health`);
   console.error(`[openresearch-chatgpt] OpenResearch: ${config.orxBaseUrl.origin}`);
 });
 
