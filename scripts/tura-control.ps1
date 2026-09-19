@@ -4,6 +4,15 @@ $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class TuraNativeMethods {
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool DestroyIcon(IntPtr hIcon);
+}
+"@
+
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $Alias = "openresearch"
 $McpUrl = "http://127.0.0.1:8787/mcp"
@@ -81,6 +90,7 @@ function Get-StackState {
         Tunnel = ($tunnel.Running -and $tunnel.Healthy -and $tunnel.Ready)
         TunnelRunning = $tunnel.Running
         AllOn = ($orx -and $bridge -and $tunnel.Running -and $tunnel.Healthy -and $tunnel.Ready)
+        AllOff = ((-not $orx) -and (-not $bridge) -and (-not $tunnel.Running))
     }
 }
 
@@ -318,94 +328,210 @@ function Stop-Stack {
     }
 }
 
-$form = New-Object System.Windows.Forms.Form
-$form.Text = "Tura Control"
-$form.Size = New-Object System.Drawing.Size(430, 330)
-$form.StartPosition = "CenterScreen"
-$form.FormBorderStyle = "FixedDialog"
-$form.MaximizeBox = $false
+function New-StatusIcon {
+    param([Parameter(Mandatory)][System.Drawing.Color]$Color)
 
-$title = New-Object System.Windows.Forms.Label
-$title.Text = "Tura / OpenResearch"
-$title.Font = New-Object System.Drawing.Font("Segoe UI", 16, [System.Drawing.FontStyle]::Bold)
-$title.Location = New-Object System.Drawing.Point(22, 18)
-$title.Size = New-Object System.Drawing.Size(370, 34)
-$form.Controls.Add($title)
+    $bitmap = New-Object System.Drawing.Bitmap(32, 32)
+    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $graphics.Clear([System.Drawing.Color]::Transparent)
 
-$details = New-Object System.Windows.Forms.Label
-$details.Font = New-Object System.Drawing.Font("Segoe UI", 10)
-$details.Location = New-Object System.Drawing.Point(25, 62)
-$details.Size = New-Object System.Drawing.Size(365, 76)
-$form.Controls.Add($details)
+    $shadowBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(70, 0, 0, 0))
+    $brush = New-Object System.Drawing.SolidBrush($Color)
+    $borderPen = New-Object System.Drawing.Pen([System.Drawing.Color]::White, 2)
 
-$button = New-Object System.Windows.Forms.Button
-$button.Location = New-Object System.Drawing.Point(25, 148)
-$button.Size = New-Object System.Drawing.Size(365, 88)
-$button.FlatStyle = "Flat"
-$button.FlatAppearance.BorderSize = 0
-$button.ForeColor = [System.Drawing.Color]::White
-$button.Font = New-Object System.Drawing.Font("Segoe UI", 16, [System.Drawing.FontStyle]::Bold)
-$form.Controls.Add($button)
+    try {
+        $graphics.FillEllipse($shadowBrush, 4, 5, 24, 24)
+        $graphics.FillEllipse($brush, 3, 3, 24, 24)
+        $graphics.DrawEllipse($borderPen, 3, 3, 24, 24)
 
-$note = New-Object System.Windows.Forms.Label
-$note.Text = "Выключение останавливает OpenResearch, Tura и OpenAI Tunnel." + [Environment]::NewLine + "В красном состоянии процессы этой связки не должны оставаться в фоне."
-$note.Font = New-Object System.Drawing.Font("Segoe UI", 8.5)
-$note.ForeColor = [System.Drawing.Color]::DimGray
-$note.Location = New-Object System.Drawing.Point(25, 248)
-$note.Size = New-Object System.Drawing.Size(365, 42)
-$form.Controls.Add($note)
-
-$script:Busy = $false
-$script:CurrentState = $null
-
-function Update-Ui {
-    if ($script:Busy) { return }
-    $state = Get-StackState
-    $script:CurrentState = $state
-
-    if ($state.OpenResearch) { $orxText = "● OpenResearch: работает" } else { $orxText = "○ OpenResearch: выключен" }
-    if ($state.Bridge) { $bridgeText = "● Tura: работает" } else { $bridgeText = "○ Tura: выключена" }
-    if ($state.Tunnel) { $tunnelText = "● Туннель: ready" } elseif ($state.TunnelRunning) { $tunnelText = "◐ Туннель: не готов" } else { $tunnelText = "○ Туннель: выключен" }
-    $details.Text = $orxText + [Environment]::NewLine + $bridgeText + [Environment]::NewLine + $tunnelText
-
-    if ($state.AllOn) {
-        $button.BackColor = [System.Drawing.Color]::SeaGreen
-        $button.Text = "ВКЛЮЧЕНО" + [Environment]::NewLine + "Нажать, чтобы выключить"
-    } else {
-        $button.BackColor = [System.Drawing.Color]::Firebrick
-        $button.Text = "ВЫКЛЮЧЕНО" + [Environment]::NewLine + "Нажать, чтобы включить"
+        $handle = $bitmap.GetHicon()
+        try {
+            return ([System.Drawing.Icon]::FromHandle($handle)).Clone()
+        } finally {
+            [void][TuraNativeMethods]::DestroyIcon($handle)
+        }
+    } finally {
+        $borderPen.Dispose()
+        $brush.Dispose()
+        $shadowBrush.Dispose()
+        $graphics.Dispose()
+        $bitmap.Dispose()
     }
 }
 
-$button.Add_Click({
+function Get-StatusText {
+    param($State)
+
+    if ($State.OpenResearch) { $orx = "OR: OK" } else { $orx = "OR: OFF" }
+    if ($State.Bridge) { $bridge = "Tura: OK" } else { $bridge = "Tura: OFF" }
+    if ($State.Tunnel) { $tunnel = "Tunnel: OK" } elseif ($State.TunnelRunning) { $tunnel = "Tunnel: WAIT" } else { $tunnel = "Tunnel: OFF" }
+
+    if ($State.AllOn) {
+        return "Tura ВКЛ | $orx | $bridge | $tunnel"
+    }
+    if ($State.AllOff) {
+        return "Tura ВЫКЛ | $orx | $bridge | $tunnel"
+    }
+    return "Tura НЕПОЛНОЕ СОСТОЯНИЕ | $orx | $bridge | $tunnel"
+}
+
+function Show-StatusBalloon {
+    param($State)
+
+    if ($State.AllOn) {
+        $title = "Tura — ВКЛЮЧЕНО"
+    } elseif ($State.AllOff) {
+        $title = "Tura — ВЫКЛЮЧЕНО"
+    } else {
+        $title = "Tura — неполное состояние"
+    }
+
+    $orx = if ($State.OpenResearch) { "OpenResearch: работает" } else { "OpenResearch: выключен" }
+    $bridge = if ($State.Bridge) { "Tura: работает" } else { "Tura: выключена" }
+    $tunnel = if ($State.Tunnel) { "Tunnel: ready" } elseif ($State.TunnelRunning) { "Tunnel: запущен, но не ready" } else { "Tunnel: выключен" }
+
+    $notify.BalloonTipTitle = $title
+    $notify.BalloonTipText = $orx + [Environment]::NewLine + $bridge + [Environment]::NewLine + $tunnel
+    $notify.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+    $notify.ShowBalloonTip(3500)
+}
+
+$greenIcon = New-StatusIcon ([System.Drawing.Color]::LimeGreen)
+$redIcon = New-StatusIcon ([System.Drawing.Color]::Red)
+$yellowIcon = New-StatusIcon ([System.Drawing.Color]::Gold)
+
+$menu = New-Object System.Windows.Forms.ContextMenuStrip
+$menuOn = $menu.Items.Add("Включить")
+$menuOff = $menu.Items.Add("Выключить")
+$menuRestart = $menu.Items.Add("Перезапустить")
+[void]$menu.Items.Add("-")
+$menuStatus = $menu.Items.Add("Статус")
+$menuLogs = $menu.Items.Add("Открыть логи")
+$menuFolder = $menu.Items.Add("Открыть папку Tura")
+[void]$menu.Items.Add("-")
+$menuExit = $menu.Items.Add("Выход")
+
+$notify = New-Object System.Windows.Forms.NotifyIcon
+$notify.Visible = $true
+$notify.ContextMenuStrip = $menu
+$notify.Icon = $yellowIcon
+$notify.Text = "Tura — проверка состояния"
+
+$script:Busy = $false
+$script:CurrentState = $null
+$script:ExitRequested = $false
+
+function Update-Tray {
+    if ($script:Busy) {
+        $notify.Icon = $yellowIcon
+        $notify.Text = "Tura — выполняется операция"
+        $menuOn.Enabled = $false
+        $menuOff.Enabled = $false
+        $menuRestart.Enabled = $false
+        return
+    }
+
+    $state = Get-StackState
+    $script:CurrentState = $state
+
+    if ($state.AllOn) {
+        $notify.Icon = $greenIcon
+    } elseif ($state.AllOff) {
+        $notify.Icon = $redIcon
+    } else {
+        $notify.Icon = $yellowIcon
+    }
+
+    $text = Get-StatusText $state
+    if ($text.Length -gt 63) { $text = $text.Substring(0, 63) }
+    $notify.Text = $text
+
+    $menuOn.Enabled = -not $state.AllOn
+    $menuOff.Enabled = -not $state.AllOff
+    $menuRestart.Enabled = $true
+}
+
+function Invoke-StackAction {
+    param([Parameter(Mandatory)][ValidateSet("start", "stop", "restart")][string]$Action)
+
     if ($script:Busy) { return }
     $script:Busy = $true
-    $button.Enabled = $false
+    Update-Tray
+    [System.Windows.Forms.Application]::DoEvents()
+
     try {
-        if ($script:CurrentState -and $script:CurrentState.AllOn) {
-            $button.Text = "Выключаю..."
-            [System.Windows.Forms.Application]::DoEvents()
-            Stop-Stack
-        } else {
-            $button.Text = "Включаю..."
-            [System.Windows.Forms.Application]::DoEvents()
-            Start-Stack
+        switch ($Action) {
+            "start" {
+                Start-Stack
+            }
+            "stop" {
+                Stop-Stack
+            }
+            "restart" {
+                Stop-Stack
+                Start-Stack
+            }
         }
     } catch {
-        [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, "Tura Control", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        $notify.BalloonTipTitle = "Tura — ошибка"
+        $notify.BalloonTipText = $_.Exception.Message
+        $notify.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Error
+        $notify.ShowBalloonTip(6000)
     } finally {
         $script:Busy = $false
-        $button.Enabled = $true
-        Update-Ui
+        Update-Tray
+    }
+}
+
+$menuOn.Add_Click({ Invoke-StackAction "start" })
+$menuOff.Add_Click({ Invoke-StackAction "stop" })
+$menuRestart.Add_Click({ Invoke-StackAction "restart" })
+$menuStatus.Add_Click({
+    Update-Tray
+    Show-StatusBalloon $script:CurrentState
+})
+$menuLogs.Add_Click({
+    New-Item -ItemType Directory -Force $LogDir | Out-Null
+    Start-Process explorer.exe $LogDir
+})
+$menuFolder.Add_Click({
+    Start-Process explorer.exe $RepoRoot
+})
+$menuExit.Add_Click({
+    $script:ExitRequested = $true
+    [System.Windows.Forms.Application]::Exit()
+})
+
+$notify.Add_MouseClick({
+    param($sender, $eventArgs)
+
+    if ($eventArgs.Button -ne [System.Windows.Forms.MouseButtons]::Left) { return }
+    if ($script:Busy) { return }
+
+    Update-Tray
+    if ($script:CurrentState.AllOn) {
+        Invoke-StackAction "stop"
+    } else {
+        Invoke-StackAction "start"
     }
 })
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 2500
-$timer.Add_Tick({ Update-Ui })
+$timer.Add_Tick({ Update-Tray })
 $timer.Start()
 
-$form.Add_Shown({ Update-Ui })
-$form.Add_FormClosed({ $timer.Stop(); $timer.Dispose() })
-
-[void]$form.ShowDialog()
+try {
+    Update-Tray
+    [System.Windows.Forms.Application]::Run()
+} finally {
+    $timer.Stop()
+    $timer.Dispose()
+    $notify.Visible = $false
+    $notify.Dispose()
+    $menu.Dispose()
+    $greenIcon.Dispose()
+    $redIcon.Dispose()
+    $yellowIcon.Dispose()
+}
