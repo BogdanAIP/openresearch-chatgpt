@@ -6,6 +6,20 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$script:TrayMutex = $null
+if ($Mode -eq "tray") {
+    $createdNew = $false
+    $script:TrayMutex = [System.Threading.Mutex]::new(
+        $true,
+        "Local\OpenResearchChatGPT.TuraIndicator",
+        [ref]$createdNew
+    )
+    if (-not $createdNew) {
+        $script:TrayMutex.Dispose()
+        exit 0
+    }
+}
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Net.Http
@@ -722,4 +736,11 @@ try {
     $greenIcon.Dispose()
     $redIcon.Dispose()
     $yellowIcon.Dispose()
+    if ($null -ne $script:TrayMutex) {
+        try {
+            $script:TrayMutex.ReleaseMutex()
+        } catch {
+        }
+        $script:TrayMutex.Dispose()
+    }
 }
