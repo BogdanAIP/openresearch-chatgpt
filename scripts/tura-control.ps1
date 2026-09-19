@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("tray", "start", "stop", "restart")]
+    [ValidateSet("tray", "start", "stop", "restart", "toggle")]
     [string]$Mode = "tray"
 )
 
@@ -436,6 +436,14 @@ if ($Mode -ne "tray") {
                 Stop-Stack
                 Start-Stack
             }
+            "toggle" {
+                $actual = Get-VerifiedStackState
+                if ($actual.AllOn) {
+                    Stop-Stack
+                } else {
+                    Start-Stack
+                }
+            }
         }
 
         [pscustomobject]@{
@@ -624,7 +632,7 @@ function Complete-WorkerIfNeeded {
 }
 
 function Invoke-StackAction {
-    param([Parameter(Mandatory)][ValidateSet("start", "stop", "restart")][string]$Action)
+    param([Parameter(Mandatory)][ValidateSet("start", "stop", "restart", "toggle")][string]$Action)
 
     if ($script:Busy) { return }
 
@@ -691,12 +699,7 @@ $notify.Add_MouseClick({
     if ($eventArgs.Button -ne [System.Windows.Forms.MouseButtons]::Left) { return }
     if ($script:Busy) { return }
 
-    Update-Tray
-    if ($script:CurrentState.AllOn) {
-        Invoke-StackAction "stop"
-    } else {
-        Invoke-StackAction "start"
-    }
+    Invoke-StackAction "toggle"
 })
 
 $workerTimer = New-Object System.Windows.Forms.Timer
