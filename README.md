@@ -99,30 +99,51 @@ ChatGPT is already the conversational agent in this architecture, so exposing an
 The bridge calls `orx`, `git`, and the local OpenResearch HTTP API internally with fixed typed operations. Child processes use `shell: false`.
 
 
-## Windows one-click controller
+## Windows tray controller
 
-On the Windows machine that hosts OpenResearch, double-click:
+On the Windows machine that hosts OpenResearch, run:
 
 ```text
 Tura Control.cmd
 ```
 
-It opens a small status window with one large button:
+This launches only the tray indicator. It does **not** automatically start OpenResearch, the Tura bridge, or the OpenAI tunnel.
 
-- green `ВКЛЮЧЕНО` when OpenResearch, the Tura bridge, and the OpenAI tunnel are all usable;
-- red `ВЫКЛЮЧЕНО` when the research stack is unavailable.
+Tray colors:
 
-Click the green button to stop the OpenAI tunnel first, then the Tura bridge and OpenResearch. A successful red `ВЫКЛЮЧЕНО` state therefore leaves no background process from this Tura/OpenResearch stack running.
+- green — OpenResearch health, Tura health, and tunnel readiness are all verified;
+- red — the research stack is off;
+- yellow — startup/shutdown is in progress or the stack is only partially healthy.
 
-Click the red button to start OpenResearch and Tura. If the OpenAI tunnel is also absent (for example after a Windows reboot), the controller starts it too. The first time this is required, the controller asks for the Runtime API key and stores it locally with Windows DPAPI encryption under `%LOCALAPPDATA%\OpenResearchChatGPT`; the key is never written to the repository.
+Left-click toggles the full research stack. Right-click provides **Включить**, **Выключить**, **Перезапустить**, **Статус**, log/folder shortcuts, and **Выход**.
+
+There is no periodic idle health polling. State is verified when the indicator starts, after manual start/stop/restart actions, and when **Статус** is selected.
+
+### Start only the indicator with Windows
+
+To make the tray dot appear automatically after Windows sign-in, while keeping OpenResearch, Tura, and the OpenAI tunnel manual, run:
+
+```text
+Tura Indicator Autostart ON.cmd
+```
+
+This creates a shortcut only in the current user's Windows Startup folder. At sign-in Windows starts the tray controller, which performs one status check and leaves the research stack off until the user manually enables it.
+
+To remove that indicator-only autostart:
+
+```text
+Tura Indicator Autostart OFF.cmd
+```
+
+The tray controller uses a named Windows mutex so manual double-clicks do not create duplicate tray indicators.
+
+A successful manual OFF state stops the OpenAI tunnel, Tura bridge, and OpenResearch. The Runtime API key, when needed, is stored locally with Windows DPAPI under `%LOCALAPPDATA%\OpenResearchChatGPT` and is never written to the repository.
 
 Logs created by the controller live under:
 
 ```text
 %LOCALAPPDATA%\OpenResearchChatGPT\logs
 ```
-
-No Windows autorun entry is installed. The controller is always started manually.
 
 ## Requirements
 
