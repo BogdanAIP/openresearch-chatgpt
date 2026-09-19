@@ -708,31 +708,14 @@ $workerTimer.Add_Tick({
     Complete-WorkerIfNeeded
 })
 
-$healthTimer = New-Object System.Windows.Forms.Timer
-$healthTimer.Interval = 60000
-$healthTimer.Add_Tick({
-    if (-not $script:Busy) {
-        Update-Tray
-    }
-})
-$healthTimer.Start()
-
-$menu.Add_Opening({
-    $healthTimer.Stop()
-})
-
-$menu.Add_Closed({
-    $healthTimer.Start()
-})
-
 try {
+    # One verification when the tray controller is launched manually.
+    # No periodic health polling runs while the controller is idle.
     Update-Tray
     [System.Windows.Forms.Application]::Run()
 } finally {
     $workerTimer.Stop()
     $workerTimer.Dispose()
-    $healthTimer.Stop()
-    $healthTimer.Dispose()
     $notify.Visible = $false
     $notify.Dispose()
     $menu.Dispose()
