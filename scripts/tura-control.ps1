@@ -1,3 +1,8 @@
+param(
+    [ValidateSet("tray", "start", "stop", "restart")]
+    [string]$Mode = "tray"
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
@@ -23,6 +28,8 @@ $TunnelIdFile = Join-Path $RepoRoot "runtime\openresearch-tunnel-id.txt"
 $StateDir = Join-Path $env:LOCALAPPDATA "OpenResearchChatGPT"
 $RuntimeKeyFile = Join-Path $StateDir "openresearch-runtime-key.dpapi"
 $LogDir = Join-Path $StateDir "logs"
+$ActionResultFile = Join-Path $StateDir "last-action.json"
+$TunnelHealthUrlFile = Join-Path $HOME ".local\state\tunnel-client\health\openresearch.url"
 
 New-Item -ItemType Directory -Force $StateDir | Out-Null
 New-Item -ItemType Directory -Force $LogDir | Out-Null
@@ -91,6 +98,78 @@ function Get-StackState {
         TunnelRunning = $tunnel.Running
         AllOn = ($orx -and $bridge -and $tunnel.Running -and $tunnel.Healthy -and $tunnel.Ready)
         AllOff = ((-not $orx) -and (-not $bridge) -and (-not $tunnel.Running))
+    }
+}
+
+function Test-TcpPortFast {
+    param(
+        [Parameter(Mandatory)][int]$Port,
+        [int]$TimeoutMs = 120
+    )
+
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $task = $client.ConnectAsync("127.0.0.1", $Port)
+        if (-not $task.Wait($TimeoutMs)) { return $false }
+        return $client.Connected
+    } catch {
+        return $false
+    } finally {
+        $client.Dispose()
+    }
+}
+
+function Test-HttpFast {
+    param(
+        [Parameter(Mandatory)][string]$Url,
+        [int]$TimeoutMs = 180
+    )
+
+    $client = New-Object System.Net.Http.HttpClient
+    $client.Timeout = [TimeSpan]::FromMilliseconds($TimeoutMs)
+    try {
+        $response = $client.GetAsync($Url).GetAwaiter().GetResult()
+        try {
+            return [bool]$response.IsSuccessStatusCode
+        } finally {
+            $response.Dispose()
+        }
+    } catch {
+        return $false
+    } finally {
+        $client.Dispose()
+    }
+}
+
+function Get-FastStackState {
+    $orx = Test-TcpPortFast 4791
+    $bridge = Test-TcpPortFast 8787
+
+    $tunnelRunning = $false
+    $tunnelReady = $false
+    if (Test-Path $TunnelHealthUrlFile) {
+        try {
+            $baseUrl = (Get-Content -LiteralPath $TunnelHealthUrlFile -Raw).Trim().TrimEnd("/")
+            if ($baseUrl) {
+                $uri = [Uri]$baseUrl
+                $tunnelRunning = Test-TcpPortFast $uri.Port
+                if ($tunnelRunning) {
+                    $tunnelReady = Test-HttpFast ($baseUrl + "/readyz")
+                }
+            }
+        } catch {
+            $tunnelRunning = $false
+            $tunnelReady = $false
+        }
+    }
+
+    return [pscustomobject]@{
+        OpenResearch = $orx
+        Bridge = $bridge
+        Tunnel = $tunnelReady
+        TunnelRunning = $tunnelRunning
+        AllOn = ($orx -and $bridge -and $tunnelReady)
+        AllOff = ((-not $orx) -and (-not $bridge) -and (-not $tunnelRunning))
     }
 }
 
@@ -328,6 +407,37 @@ function Stop-Stack {
     }
 }
 
+if ($Mode -ne "tray") {
+    try {
+        switch ($Mode) {
+            "start" {
+                Start-Stack
+            }
+            "stop" {
+                Stop-Stack
+            }
+            "restart" {
+                Stop-Stack
+                Start-Stack
+            }
+        }
+
+        [pscustomobject]@{
+            ok = $true
+            action = $Mode
+            message = "Готово"
+        } | ConvertTo-Json | Set-Content -LiteralPath $ActionResultFile -Encoding UTF8
+        exit 0
+    } catch {
+        [pscustomobject]@{
+            ok = $false
+            action = $Mode
+            message = $_.Exception.Message
+        } | ConvertTo-Json | Set-Content -LiteralPath $ActionResultFile -Encoding UTF8
+        exit 1
+    }
+}
+
 function New-StatusIcon {
     param([Parameter(Mandatory)][System.Drawing.Color]$Color)
 
@@ -420,7 +530,7 @@ $notify.Text = "Tura — проверка состояния"
 
 $script:Busy = $false
 $script:CurrentState = $null
-$script:ExitRequested = $false
+$script:Worker = $null
 
 function Update-Tray {
     if ($script:Busy) {
@@ -429,10 +539,12 @@ function Update-Tray {
         $menuOn.Enabled = $false
         $menuOff.Enabled = $false
         $menuRestart.Enabled = $false
+        $menuStatus.Enabled = $true
+        $menuExit.Enabled = $false
         return
     }
 
-    $state = Get-StackState
+    $state = Get-FastStackState
     $script:CurrentState = $state
 
     if ($state.AllOn) {
@@ -450,36 +562,87 @@ function Update-Tray {
     $menuOn.Enabled = -not $state.AllOn
     $menuOff.Enabled = -not $state.AllOff
     $menuRestart.Enabled = $true
+    $menuStatus.Enabled = $true
+    $menuExit.Enabled = $true
+}
+
+function Show-WorkerErrorIfAny {
+    if (-not (Test-Path $ActionResultFile)) { return }
+
+    try {
+        $result = (Get-Content -LiteralPath $ActionResultFile -Raw) | ConvertFrom-Json
+        if (-not [bool]$result.ok) {
+            $notify.BalloonTipTitle = "Tura — ошибка"
+            $notify.BalloonTipText = [string]$result.message
+            $notify.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Error
+            $notify.ShowBalloonTip(6000)
+        }
+    } catch {
+        # A malformed status file must never freeze the tray UI.
+    }
+}
+
+function Complete-WorkerIfNeeded {
+    if (-not $script:Busy -or $null -eq $script:Worker) { return }
+
+    try {
+        if (-not $script:Worker.HasExited) { return }
+        $exitCode = $script:Worker.ExitCode
+    } catch {
+        $exitCode = 1
+    }
+
+    try {
+        $script:Worker.Dispose()
+    } catch {
+    }
+
+    $script:Worker = $null
+    $script:Busy = $false
+    Update-Tray
+
+    if ($exitCode -ne 0) {
+        Show-WorkerErrorIfAny
+    }
 }
 
 function Invoke-StackAction {
     param([Parameter(Mandatory)][ValidateSet("start", "stop", "restart")][string]$Action)
 
     if ($script:Busy) { return }
+
+    Remove-Item -LiteralPath $ActionResultFile -Force -ErrorAction SilentlyContinue
+
     $script:Busy = $true
-    Update-Tray
-    [System.Windows.Forms.Application]::DoEvents()
+    $notify.Icon = $yellowIcon
+    $notify.Text = "Tura — выполняется операция"
+    $menuOn.Enabled = $false
+    $menuOff.Enabled = $false
+    $menuRestart.Enabled = $false
+    $menuExit.Enabled = $false
 
     try {
-        switch ($Action) {
-            "start" {
-                Start-Stack
-            }
-            "stop" {
-                Stop-Stack
-            }
-            "restart" {
-                Stop-Stack
-                Start-Stack
-            }
+        $hostPath = (Get-Process -Id $PID).Path
+        $params = @{
+            FilePath = $hostPath
+            ArgumentList = @(
+                "-NoProfile",
+                "-STA",
+                "-ExecutionPolicy", "Bypass",
+                "-File", $PSCommandPath,
+                "-Mode", $Action
+            )
+            WindowStyle = "Hidden"
+            PassThru = $true
         }
+        $script:Worker = Start-Process @params
     } catch {
+        $script:Busy = $false
+        $script:Worker = $null
         $notify.BalloonTipTitle = "Tura — ошибка"
         $notify.BalloonTipText = $_.Exception.Message
         $notify.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Error
         $notify.ShowBalloonTip(6000)
-    } finally {
-        $script:Busy = $false
         Update-Tray
     }
 }
@@ -488,7 +651,9 @@ $menuOn.Add_Click({ Invoke-StackAction "start" })
 $menuOff.Add_Click({ Invoke-StackAction "stop" })
 $menuRestart.Add_Click({ Invoke-StackAction "restart" })
 $menuStatus.Add_Click({
-    Update-Tray
+    if ($null -eq $script:CurrentState) {
+        Update-Tray
+    }
     Show-StatusBalloon $script:CurrentState
 })
 $menuLogs.Add_Click({
@@ -499,8 +664,9 @@ $menuFolder.Add_Click({
     Start-Process explorer.exe $RepoRoot
 })
 $menuExit.Add_Click({
-    $script:ExitRequested = $true
-    [System.Windows.Forms.Application]::Exit()
+    if (-not $script:Busy) {
+        [System.Windows.Forms.Application]::Exit()
+    }
 })
 
 $notify.Add_MouseClick({
@@ -509,7 +675,9 @@ $notify.Add_MouseClick({
     if ($eventArgs.Button -ne [System.Windows.Forms.MouseButtons]::Left) { return }
     if ($script:Busy) { return }
 
-    Update-Tray
+    if ($null -eq $script:CurrentState) {
+        Update-Tray
+    }
     if ($script:CurrentState.AllOn) {
         Invoke-StackAction "stop"
     } else {
@@ -518,9 +686,26 @@ $notify.Add_MouseClick({
 })
 
 $timer = New-Object System.Windows.Forms.Timer
-$timer.Interval = 2500
-$timer.Add_Tick({ Update-Tray })
+$timer.Interval = 1500
+$timer.Add_Tick({
+    Complete-WorkerIfNeeded
+    if (-not $script:Busy) {
+        Update-Tray
+    }
+})
 $timer.Start()
+
+$menu.Add_Opening({
+    $timer.Stop()
+})
+
+$menu.Add_Closed({
+    Complete-WorkerIfNeeded
+    if (-not $script:Busy) {
+        Update-Tray
+    }
+    $timer.Start()
+})
 
 try {
     Update-Tray
