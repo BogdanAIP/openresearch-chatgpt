@@ -1,10 +1,10 @@
 @echo off
 setlocal
-set "SCRIPT=%~dp0scripts\tura-control.ps1"
+set "LAUNCHER=%~dp0scripts\tura-control-launch.ps1"
 where pwsh.exe >nul 2>&1
 if %ERRORLEVEL% EQU 0 (
-    start "" pwsh.exe -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "%SCRIPT%"
+    start "" pwsh.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%LAUNCHER%"
 ) else (
-    start "" powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "%SCRIPT%"
+    start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%LAUNCHER%"
 )
 endlocal
