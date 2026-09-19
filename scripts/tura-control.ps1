@@ -120,10 +120,11 @@ function Test-TcpPortFast {
     }
 }
 
-function Test-HttpFast {
+function Test-HttpStatusFast {
     param(
         [Parameter(Mandatory)][string]$Url,
-        [int]$TimeoutMs = 180
+        [int]$TimeoutMs = 500,
+        [switch]$RequireOkField
     )
 
     $client = New-Object System.Net.Http.HttpClient
@@ -131,7 +132,12 @@ function Test-HttpFast {
     try {
         $response = $client.GetAsync($Url).GetAwaiter().GetResult()
         try {
-            return [bool]$response.IsSuccessStatusCode
+            if (-not $response.IsSuccessStatusCode) { return $false }
+            if (-not $RequireOkField) { return $true }
+
+            $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+            $json = $body | ConvertFrom-Json
+            return ($null -ne $json.ok -and [bool]$json.ok)
         } finally {
             $response.Dispose()
         }
@@ -142,9 +148,18 @@ function Test-HttpFast {
     }
 }
 
-function Get-FastStackState {
-    $orx = Test-TcpPortFast 4791
-    $bridge = Test-TcpPortFast 8787
+function Get-VerifiedStackState {
+    $orxPort = Test-TcpPortFast 4791
+    $bridgePort = Test-TcpPortFast 8787
+
+    $orx = $false
+    $bridge = $false
+    if ($orxPort) {
+        $orx = Test-HttpStatusFast $OpenResearchHealthUrl -RequireOkField
+    }
+    if ($bridgePort) {
+        $bridge = Test-HttpStatusFast $BridgeHealthUrl -RequireOkField
+    }
 
     $tunnelRunning = $false
     $tunnelReady = $false
@@ -155,7 +170,7 @@ function Get-FastStackState {
                 $uri = [Uri]$baseUrl
                 $tunnelRunning = Test-TcpPortFast $uri.Port
                 if ($tunnelRunning) {
-                    $tunnelReady = Test-HttpFast ($baseUrl + "/readyz")
+                    $tunnelReady = Test-HttpStatusFast ($baseUrl + "/readyz")
                 }
             }
         } catch {
@@ -170,7 +185,7 @@ function Get-FastStackState {
         Tunnel = $tunnelReady
         TunnelRunning = $tunnelRunning
         AllOn = ($orx -and $bridge -and $tunnelReady)
-        AllOff = ((-not $orx) -and (-not $bridge) -and (-not $tunnelRunning))
+        AllOff = ((-not $orxPort) -and (-not $bridgePort) -and (-not $tunnelRunning))
     }
 }
 
@@ -545,7 +560,7 @@ function Update-Tray {
         return
     }
 
-    $state = Get-FastStackState
+    $state = Get-VerifiedStackState
     $script:CurrentState = $state
 
     if ($state.AllOn) {
@@ -600,6 +615,7 @@ function Complete-WorkerIfNeeded {
 
     $script:Worker = $null
     $script:Busy = $false
+    $workerTimer.Stop()
     Update-Tray
 
     if ($exitCode -ne 0) {
@@ -637,6 +653,7 @@ function Invoke-StackAction {
             PassThru = $true
         }
         $script:Worker = Start-Process @params
+        $workerTimer.Start()
     } catch {
         $script:Busy = $false
         $script:Worker = $null
@@ -652,9 +669,7 @@ $menuOn.Add_Click({ Invoke-StackAction "start" })
 $menuOff.Add_Click({ Invoke-StackAction "stop" })
 $menuRestart.Add_Click({ Invoke-StackAction "restart" })
 $menuStatus.Add_Click({
-    if ($null -eq $script:CurrentState) {
-        Update-Tray
-    }
+    Update-Tray
     Show-StatusBalloon $script:CurrentState
 })
 $menuLogs.Add_Click({
@@ -676,9 +691,7 @@ $notify.Add_MouseClick({
     if ($eventArgs.Button -ne [System.Windows.Forms.MouseButtons]::Left) { return }
     if ($script:Busy) { return }
 
-    if ($null -eq $script:CurrentState) {
-        Update-Tray
-    }
+    Update-Tray
     if ($script:CurrentState.AllOn) {
         Invoke-StackAction "stop"
     } else {
@@ -686,34 +699,37 @@ $notify.Add_MouseClick({
     }
 })
 
-$timer = New-Object System.Windows.Forms.Timer
-$timer.Interval = 1500
-$timer.Add_Tick({
+$workerTimer = New-Object System.Windows.Forms.Timer
+$workerTimer.Interval = 500
+$workerTimer.Add_Tick({
     Complete-WorkerIfNeeded
+})
+
+$healthTimer = New-Object System.Windows.Forms.Timer
+$healthTimer.Interval = 60000
+$healthTimer.Add_Tick({
     if (-not $script:Busy) {
         Update-Tray
     }
 })
-$timer.Start()
+$healthTimer.Start()
 
 $menu.Add_Opening({
-    $timer.Stop()
+    $healthTimer.Stop()
 })
 
 $menu.Add_Closed({
-    Complete-WorkerIfNeeded
-    if (-not $script:Busy) {
-        Update-Tray
-    }
-    $timer.Start()
+    $healthTimer.Start()
 })
 
 try {
     Update-Tray
     [System.Windows.Forms.Application]::Run()
 } finally {
-    $timer.Stop()
-    $timer.Dispose()
+    $workerTimer.Stop()
+    $workerTimer.Dispose()
+    $healthTimer.Stop()
+    $healthTimer.Dispose()
     $notify.Visible = $false
     $notify.Dispose()
     $menu.Dispose()
